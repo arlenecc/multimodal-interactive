@@ -73,7 +73,6 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1200, 800)
         self._api_thread = None
         self._api_worker = None
-        self._api_client = None
         self._setup_ui()
         self._load_config()
 
@@ -106,10 +105,6 @@ class MainWindow(QMainWindow):
         # Connect signals
         self.chat_panel.message_sent.connect(self._on_message_sent)
         self.config_panel.send_request.connect(self._on_send_request)
-
-        # Initialize API client with log callback
-        self._api_client = MultimodalAPIClient(self.config_panel.get_config())
-        self._api_client.set_log_callback(self._on_api_log)
 
     def _load_config(self):
         """Load saved configuration."""
@@ -147,9 +142,6 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "配置错误", "\n".join(errors))
             return
 
-        # Update API client config
-        self._api_client.update_config(config)
-
         # Get conversation messages
         messages = self.chat_panel.conversation.messages
 
@@ -168,7 +160,12 @@ class MainWindow(QMainWindow):
         self.config_panel.send_btn.setText("处理中...")
         self.chat_panel.send_btn.setEnabled(False)
 
-        # Start worker thread
+        # Start worker thread. Reuse guard: if a previous thread is somehow
+        # still alive (shouldn't happen — buttons are disabled during request),
+        # refuse to start a second one to avoid orphaned threads.
+        if self._api_thread is not None and self._api_thread.isRunning():
+            return
+
         self._api_thread = QThread()
         self._api_worker = APIWorker(config, messages, stream=stream)
         self._api_worker.moveToThread(self._api_thread)
@@ -179,9 +176,13 @@ class MainWindow(QMainWindow):
         self._api_worker.error_occurred.connect(self._on_api_error)
         self._api_worker.log_entry.connect(self._on_api_log)
 
-        # Cleanup
+        # Cleanup: quit the thread on completion, then delete both the worker
+        # and the thread once they're finished. Without these deleteLater
+        # connections every send leaks a QThread + worker pair.
         self._api_worker.response_complete.connect(self._api_thread.quit)
         self._api_worker.error_occurred.connect(self._api_thread.quit)
+        self._api_thread.finished.connect(self._api_worker.deleteLater)
+        self._api_thread.finished.connect(self._api_thread.deleteLater)
         self._api_thread.finished.connect(self._enable_send_buttons)
 
         self._api_thread.start()

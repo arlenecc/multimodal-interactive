@@ -9,6 +9,14 @@ from src.config import AppConfig
 from src.models.message import MediaContent, Message, MessageRole, MediaType
 
 
+# Timeouts:
+#  - Non-stream requests: 120s total is fine.
+#  - Stream requests: a long response can take many minutes, so use a generous
+#    read timeout (time allowed between chunks) instead of a hard total cap.
+_DEFAULT_TIMEOUT = httpx.Timeout(120.0)
+_STREAM_TIMEOUT = httpx.Timeout(connect=15.0, read=300.0, write=30.0, pool=15.0)
+
+
 class MultimodalAPIClient:
     """Client for interacting with OpenAI-compatible multimodal APIs."""
 
@@ -53,7 +61,7 @@ class MultimodalAPIClient:
             request_info += f"Body: {json.dumps(json_data, ensure_ascii=False, indent=2)[:2000]}"
         self._log("request", request_info)
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
             if method == "GET":
                 response = await client.get(url, headers=headers)
             else:
@@ -73,10 +81,21 @@ class MultimodalAPIClient:
         request_info = f"POST {url} (stream)\nBody: {json.dumps(json_data, ensure_ascii=False, indent=2)[:2000]}"
         self._log("request", request_info)
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=_STREAM_TIMEOUT) as client:
             async with client.stream("POST", url, headers=headers, json=json_data) as response:
                 self._log("response", f"Status: {response.status_code} (streaming)")
-                response.raise_for_status()
+                if response.status_code >= 400:
+                    # Read the error body so it shows up in the log and in the
+                    # raised exception message (otherwise the stream is closed
+                    # before the body can be inspected).
+                    error_body = await response.aread()
+                    error_text = error_body.decode("utf-8", errors="replace")[:2000]
+                    self._log("error", f"HTTP {response.status_code}: {error_text}")
+                    raise httpx.HTTPStatusError(
+                        f"HTTP {response.status_code}: {error_text}",
+                        request=response.request,
+                        response=response,
+                    )
                 async for line in response.aiter_lines():
                     if line.startswith("data: "):
                         data = line[6:]
@@ -111,10 +130,22 @@ class MultimodalAPIClient:
         msg_data = choice.get("message", {})
         content = msg_data.get("content", "")
 
-        # Parse response content for any media
+        # Some multimodal APIs return content as a list of parts
+        # (e.g. [{"type": "text", "text": "..."}]). Flatten to a single string.
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, dict):
+                    parts.append(part.get("text", "") or "")
+                else:
+                    parts.append(str(part))
+            content = "".join(parts)
+        elif not isinstance(content, str):
+            content = str(content) if content is not None else ""
+
         response_msg = Message(
             role=MessageRole.ASSISTANT,
-            text=content if isinstance(content, str) else str(content),
+            text=content,
         )
         return response_msg
 

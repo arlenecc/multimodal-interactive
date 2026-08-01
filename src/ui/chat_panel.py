@@ -2,12 +2,12 @@
 import os
 import time
 
-from PyQt6.QtCore import pyqtSignal, Qt, QSize
+from PyQt6.QtCore import pyqtSignal, Qt, QSize, QEvent, QTimer
 from PyQt6.QtGui import QPixmap, QIcon, QImage
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLabel,
     QPushButton, QScrollArea, QFrame, QFileDialog, QSizePolicy,
-    QProgressBar, QToolButton, QMenu,
+    QProgressBar, QToolButton, QMenu, QMessageBox, QApplication,
 )
 
 from src.models.message import Message, MessageRole, MediaContent, MediaType, Conversation
@@ -146,11 +146,14 @@ class MessageBubble(QFrame):
         if self.message.text:
             text_label = QLabel(self.message.text)
             text_label.setWordWrap(True)
-            text_label.setTextFormat(Qt.TextFormat.RichText)
+            # Use PlainText so HTML/code/markdown from the model is shown literally
+            # rather than being rendered (which would break display of <tags> etc.)
+            text_label.setTextFormat(Qt.TextFormat.PlainText)
             text_label.setStyleSheet("font-size: 13px; background: transparent;")
             text_label.setTextInteractionFlags(
                 Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.LinksAccessibleByMouse
             )
+            # Rich text would interpret <...>; PlainText shows raw text safely.
             bubble_layout.addWidget(text_label)
 
         # Media content
@@ -160,9 +163,10 @@ class MessageBubble(QFrame):
                 pixmap = QPixmap(media.file_path)
                 if not pixmap.isNull():
                     max_width = 300
-                    if pixmap.width() > max_width:
+                    max_height = 400
+                    if pixmap.width() > max_width or pixmap.height() > max_height:
                         pixmap = pixmap.scaled(
-                            max_width, int(max_width * pixmap.height() / pixmap.width()),
+                            max_width, max_height,
                             Qt.AspectRatioMode.KeepAspectRatio,
                             Qt.TransformationMode.SmoothTransformation,
                         )
@@ -201,6 +205,9 @@ class ChatPanel(QWidget):
         self._streaming_label = None
         self._stream_start_time = None
         self._stream_token_count = 0
+        self._stream_text = ""
+        self._stream_role_label = None
+        self._last_ui_update_ts = 0.0
         self._setup_ui()
 
     def _setup_ui(self):
@@ -261,6 +268,9 @@ class ChatPanel(QWidget):
         self.text_input.setStyleSheet(
             "QTextEdit { border: 1px solid #ccc; border-radius: 4px; padding: 6px; font-size: 13px; }"
         )
+        # QTextEdit consumes Return; install an event filter so we can intercept
+        # Enter (without Shift) to send, while Shift+Enter still inserts a newline.
+        self.text_input.installEventFilter(self)
         input_layout.addWidget(self.text_input, 1)
 
         # Send button
@@ -304,7 +314,12 @@ class ChatPanel(QWidget):
 
         media_type = detect_media_type(filepath)
         if media_type is None:
-            media_type = "image"  # Default fallback
+            QMessageBox.warning(
+                self, "不支持的文件",
+                f"不支持的文件类型：{os.path.basename(filepath)}\n"
+                "仅支持图片、音频、视频文件。",
+            )
+            return
 
         self.media_preview.add_media(filepath, media_type)
 
@@ -335,6 +350,9 @@ class ChatPanel(QWidget):
         # Clear input
         self.text_input.clear()
         self.media_preview.clear_all()
+        # Keep focus on the input so the user can immediately type the next
+        # message (clicking the send button moves focus away otherwise).
+        self.text_input.setFocus()
 
     def add_message(self, message: Message):
         """Add a message to the chat display."""
@@ -348,7 +366,8 @@ class ChatPanel(QWidget):
         """Prepare for a streaming response message."""
         self._streaming_label = QLabel("")
         self._streaming_label.setWordWrap(True)
-        self._streaming_label.setTextFormat(Qt.TextFormat.RichText)
+        # PlainText so model output containing <tags> is shown literally
+        self._streaming_label.setTextFormat(Qt.TextFormat.PlainText)
         self._streaming_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
@@ -356,15 +375,16 @@ class ChatPanel(QWidget):
             "QLabel { background-color: #F1F8E9; border-radius: 8px; padding: 8px; font-size: 13px; }"
         )
 
-        # Role label
-        role_label = QLabel("助手")
-        role_label.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 11px;")
-        self.chat_layout.insertWidget(self.chat_layout.count() - 1, role_label)
+        # Role label (kept reference so we can remove it when finalizing)
+        self._stream_role_label = QLabel("助手")
+        self._stream_role_label.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 11px;")
+        self.chat_layout.insertWidget(self.chat_layout.count() - 1, self._stream_role_label)
         self.chat_layout.insertWidget(self.chat_layout.count() - 1, self._streaming_label)
 
         self._stream_start_time = time.time()
         self._stream_token_count = 0
         self._stream_text = ""
+        self._last_ui_update_ts = 0.0
         self.speed_label.show()
         self._scroll_to_bottom()
 
@@ -375,18 +395,29 @@ class ChatPanel(QWidget):
 
         self._stream_text += token
         self._stream_token_count += 1
-        self._streaming_label.setText(self._stream_text)
 
-        # Update speed indicator
-        elapsed = time.time() - self._stream_start_time
+        # Throttle label updates: re-rendering the whole label on every token is
+        # O(n^2) for long responses. Update the visible text at most ~30 times/s.
+        # The final text is always shown because finish_streaming_message()
+        # replaces the streaming label with a real bubble built from _stream_text.
+        now = time.time()
+        if now - self._last_ui_update_ts >= 0.033:
+            self._streaming_label.setText(self._stream_text)
+            self._last_ui_update_ts = now
+            self._scroll_to_bottom()
+
+        # Update speed indicator (cheap; can run every token)
+        elapsed = now - self._stream_start_time
         if elapsed > 0:
             tokens_per_sec = self._stream_token_count / elapsed
-            self.speed_label.setText(f"推理速度: {tokens_per_sec:.1f} tokens/s | 已用时间: {elapsed:.1f}s | Tokens: {self._stream_token_count}")
-
-        self._scroll_to_bottom()
+            self.speed_label.setText(
+                f"推理速度: {tokens_per_sec:.1f} tokens/s | "
+                f"已用时间: {elapsed:.1f}s | Tokens: {self._stream_token_count}"
+            )
 
     def finish_streaming_message(self):
-        """Finalize the streaming message."""
+        """Finalize the streaming message and replace the streaming label with
+        a proper MessageBubble so it has a consistent look (timestamp, etc.)."""
         if self._streaming_label is None:
             return
 
@@ -394,13 +425,37 @@ class ChatPanel(QWidget):
         msg = Message(role=MessageRole.ASSISTANT, text=final_text)
         self.conversation.add_message(msg)
 
+        # Remove the temporary streaming widgets from the layout and replace
+        # them with a real bubble built from the finalized message.
+        streaming_label = self._streaming_label
+        role_label = self._stream_role_label
+
+        role_label.setParent(None)
+        role_label.deleteLater()
+        streaming_label.setParent(None)
+        streaming_label.deleteLater()
+
+        bubble = MessageBubble(msg)
+        self.chat_layout.insertWidget(self.chat_layout.count() - 1, bubble)
+
         self._streaming_label = None
+        self._stream_role_label = None
         self._stream_start_time = None
         self._stream_token_count = 0
+        self._stream_text = ""
         self.speed_label.hide()
+        self._scroll_to_bottom()
 
     def _scroll_to_bottom(self):
-        """Scroll the chat area to the bottom."""
+        """Scroll the chat area to the bottom.
+
+        Deferred to the next event-loop iteration because at the call site
+        the layout hasn't necessarily recomputed yet, so scrollbar.maximum()
+        may still reflect the old content height.
+        """
+        QTimer.singleShot(0, self._do_scroll_to_bottom)
+
+    def _do_scroll_to_bottom(self):
         scrollbar = self.scroll_area.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
@@ -413,12 +468,34 @@ class ChatPanel(QWidget):
             if item.widget():
                 item.widget().deleteLater()
         self._streaming_label = None
+        self._stream_role_label = None
+        self._stream_start_time = None
+        self._stream_token_count = 0
+        self._stream_text = ""
         self.speed_label.hide()
 
-    def keyPressEvent(self, event):
-        """Handle key press events."""
-        if event.key() == Qt.Key.Key_Return and not event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-            if self.text_input.hasFocus():
+    def eventFilter(self, obj, event):
+        """Intercept Return/Enter on the text input to send the message.
+
+        QTextEdit consumes the Return key, so ChatPanel.keyPressEvent never
+        receives it. The event filter lets us intercept before QTextEdit
+        handles it: Enter sends, Shift+Enter inserts a newline.
+
+        We also avoid intercepting Enter while the input method is composing
+        (e.g. Chinese pinyin), because Enter is used to commit the preedit
+        text in that case — sending the message would be wrong.
+        """
+        if obj is self.text_input and event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                    # Shift+Enter: let QTextEdit insert a newline.
+                    return False
+                # Don't hijack Enter while the IME is composing (Chinese/Japanese
+                # input methods use Enter to commit the candidate).
+                im = QApplication.inputMethod()
+                if im is not None and im.isComposing():
+                    return False
                 self._on_send()
-                return
-        super().keyPressEvent(event)
+                return True  # swallow so QTextEdit doesn't insert a newline
+        return super().eventFilter(obj, event)

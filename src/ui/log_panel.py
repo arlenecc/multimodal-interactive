@@ -1,4 +1,5 @@
 """Log panel widget - displays API interaction logs for debugging."""
+import html
 from datetime import datetime
 
 from PyQt6.QtCore import pyqtSignal, Qt
@@ -44,6 +45,9 @@ class LogPanel(QWidget):
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setFontFamily("Menlo, Monaco, Courier New, monospace")
+        # Cap retained blocks so a long debugging session doesn't blow up
+        # memory (each append() adds one block; oldest are evicted automatically).
+        self.log_text.setMaximumBlockCount(1000)
         self.log_text.setStyleSheet(
             "QTextEdit { background-color: #1e1e1e; color: #d4d4d4; "
             "font-size: 11px; border: 1px solid #333; }"
@@ -75,15 +79,19 @@ class LogPanel(QWidget):
             color = "#d4d4d4"
             icon = "..."
 
-        html = (
+        # Escape content so HTML/<script>/etc. in API responses is shown literally
+        # instead of being interpreted by the QTextEdit's HTML renderer.
+        safe_content = html.escape(content, quote=False)
+
+        html_out = (
             f'<div style="margin: 2px 0;">'
             f'<span style="color: #858585;">[{timestamp}]</span> '
             f'<span style="color: {color}; font-weight: bold;">{icon} {direction.upper()}</span>'
             f'<pre style="color: {color}; margin: 2px 0 2px 16px; white-space: pre-wrap;">'
-            f'{content}</pre>'
+            f'{safe_content}</pre>'
             f'</div>'
         )
-        self.log_text.append(html)
+        self.log_text.append(html_out)
 
         if self.auto_scroll_check.isChecked():
             scrollbar = self.log_text.verticalScrollBar()
