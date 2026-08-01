@@ -123,9 +123,38 @@ class TestMultimodalAPIClient:
 
         with patch.object(client, "_make_stream_request", new=mock_stream):
             collected = []
-            async for token in client.send_message_stream([]):
-                collected.append(token)
-            assert collected == ["Hello", " ", "world"]
+            async for kind, token in client.send_message_stream([]):
+                collected.append((kind, token))
+            assert collected == [
+                ("content", "Hello"),
+                ("content", " "),
+                ("content", "world"),
+            ]
+
+    @pytest.mark.asyncio
+    async def test_stream_with_reasoning(self):
+        """Test streaming response with reasoning content (e.g. DeepSeek)."""
+        client = self._make_client()
+        chunks = [
+            {"choices": [{"delta": {"reasoning_content": "Let me think..."}}]},
+            {"choices": [{"delta": {"reasoning_content": " about this"}}]},
+            {"choices": [{"delta": {"content": "Answer"}}]},
+            {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+        ]
+
+        async def mock_stream(*args, **kwargs):
+            for chunk in chunks:
+                yield chunk
+
+        with patch.object(client, "_make_stream_request", new=mock_stream):
+            collected = []
+            async for kind, token in client.send_message_stream([]):
+                collected.append((kind, token))
+            assert collected == [
+                ("reasoning", "Let me think..."),
+                ("reasoning", " about this"),
+                ("content", "Answer"),
+            ]
 
     def test_build_headers(self):
         """Test building request headers."""

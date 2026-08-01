@@ -38,7 +38,6 @@ class ConfigPanel(QWidget):
     """Configuration panel with API settings."""
 
     config_changed = pyqtSignal(AppConfig)
-    send_request = pyqtSignal(AppConfig)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -47,102 +46,80 @@ class ConfigPanel(QWidget):
         self._setup_ui()
 
     def _setup_ui(self):
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(8)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 2, 8, 2)
+        layout.setSpacing(2)
 
-        # Base URL
-        url_group = QVBoxLayout()
-        url_group.setSpacing(2)
+        label_style = "font-weight: bold; font-size: 11px;"
+
+        # --- Row 1: Base URL, API Key, Model, Fetch button ---
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
+
         url_label = QLabel("Base URL:")
-        url_label.setStyleSheet("font-weight: bold; font-size: 11px;")
+        url_label.setStyleSheet(label_style)
+        row1.addWidget(url_label)
         self.base_url_input = QLineEdit()
         self.base_url_input.setPlaceholderText("https://api.openai.com/v1")
         self.base_url_input.setMinimumWidth(200)
-        url_group.addWidget(url_label)
-        url_group.addWidget(self.base_url_input)
-        layout.addLayout(url_group, 3)
+        row1.addWidget(self.base_url_input, 3)
 
-        # API Key
-        key_group = QVBoxLayout()
-        key_group.setSpacing(2)
         key_label = QLabel("API Key:")
-        key_label.setStyleSheet("font-weight: bold; font-size: 11px;")
+        key_label.setStyleSheet(label_style)
+        row1.addWidget(key_label)
         self.api_key_input = QLineEdit()
         self.api_key_input.setPlaceholderText("sk-...")
         self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key_input.setMinimumWidth(150)
-        key_group.addWidget(key_label)
-        key_group.addWidget(self.api_key_input)
-        layout.addLayout(key_group, 2)
+        row1.addWidget(self.api_key_input, 2)
 
-        # Model
-        model_group = QVBoxLayout()
-        model_group.setSpacing(2)
         model_label = QLabel("Model:")
-        model_label.setStyleSheet("font-weight: bold; font-size: 11px;")
-        model_row = QHBoxLayout()
-        model_row.setSpacing(4)
+        model_label.setStyleSheet(label_style)
+        row1.addWidget(model_label)
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
         self.model_combo.setMinimumWidth(150)
         self.model_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        row1.addWidget(self.model_combo, 2)
         self.fetch_btn = QPushButton("获取模型")
         self.fetch_btn.setFixedWidth(80)
         self.fetch_btn.clicked.connect(self._on_fetch_models)
-        model_row.addWidget(self.model_combo)
-        model_row.addWidget(self.fetch_btn)
-        model_group.addWidget(model_label)
-        model_group.addLayout(model_row)
-        layout.addLayout(model_group, 2)
+        row1.addWidget(self.fetch_btn)
 
-        # Parameters
-        param_group = QVBoxLayout()
-        param_group.setSpacing(2)
+        row1.addStretch()
+        layout.addLayout(row1)
+
+        # --- Row 2: Max Tokens, Temp, Stream, Send button ---
+        row2 = QHBoxLayout()
+        row2.setSpacing(8)
+
         param_label = QLabel("参数:")
-        param_label.setStyleSheet("font-weight: bold; font-size: 11px;")
-        param_row = QHBoxLayout()
-        param_row.setSpacing(4)
+        param_label.setStyleSheet(label_style)
+        row2.addWidget(param_label)
 
-        # Max tokens
-        param_row.addWidget(QLabel("Max Tokens:"))
+        row2.addWidget(QLabel("Max Tokens:"))
         self.max_tokens_spin = QSpinBox()
         self.max_tokens_spin.setRange(1, 128000)
         self.max_tokens_spin.setValue(4096)
         self.max_tokens_spin.setFixedWidth(80)
-        param_row.addWidget(self.max_tokens_spin)
+        row2.addWidget(self.max_tokens_spin)
 
-        # Temperature
-        param_row.addWidget(QLabel("Temp:"))
+        row2.addWidget(QLabel("Temp:"))
         self.temp_spin = QDoubleSpinBox()
         self.temp_spin.setRange(0.0, 2.0)
         self.temp_spin.setValue(0.7)
         self.temp_spin.setSingleStep(0.1)
         self.temp_spin.setDecimals(1)
         self.temp_spin.setFixedWidth(60)
-        param_row.addWidget(self.temp_spin)
+        row2.addWidget(self.temp_spin)
 
-        # Stream
         self.stream_check = QCheckBox("Stream")
         self.stream_check.setChecked(True)
-        param_row.addWidget(self.stream_check)
+        row2.addWidget(self.stream_check)
 
-        param_group.addWidget(param_label)
-        param_group.addLayout(param_row)
-        layout.addLayout(param_group, 2)
+        row2.addStretch()
 
-        # Send button
-        self.send_btn = QPushButton("发送")
-        self.send_btn.setFixedWidth(80)
-        self.send_btn.setMinimumHeight(40)
-        self.send_btn.setStyleSheet(
-            "QPushButton { background-color: #4CAF50; color: white; font-weight: bold; "
-            "border-radius: 4px; font-size: 14px; }"
-            "QPushButton:hover { background-color: #45a049; }"
-            "QPushButton:disabled { background-color: #cccccc; }"
-        )
-        self.send_btn.clicked.connect(self._on_send)
-        layout.addWidget(self.send_btn)
+        layout.addLayout(row2)
 
     def _on_fetch_models(self):
         """Fetch models from the API."""
@@ -198,11 +175,6 @@ class ConfigPanel(QWidget):
         self.fetch_btn.setEnabled(True)
         self.fetch_btn.setText("获取模型")
         QMessageBox.critical(self, "获取模型失败", f"错误: {error_msg}")
-
-    def _on_send(self):
-        """Handle send button click."""
-        config = self.get_config()
-        self.send_request.emit(config)
 
     def get_config(self) -> AppConfig:
         """Get current configuration from UI."""

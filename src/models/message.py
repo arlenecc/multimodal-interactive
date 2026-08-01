@@ -122,6 +122,7 @@ class Message:
     media: List[MediaContent] = field(default_factory=list)
     timestamp: datetime = field(default_factory=datetime.now)
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    reasoning: str = ""
 
     def to_openai_format(self) -> dict:
         """Convert to OpenAI API message format."""

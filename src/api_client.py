@@ -130,6 +130,7 @@ class MultimodalAPIClient:
         choice = response_data.get("choices", [{}])[0]
         msg_data = choice.get("message", {})
         content = msg_data.get("content", "")
+        reasoning = msg_data.get("reasoning_content", "") or msg_data.get("reasoning", "")
 
         # Some multimodal APIs return content as a list of parts
         # (e.g. [{"type": "text", "text": "..."}]). Flatten to a single string.
@@ -144,14 +145,21 @@ class MultimodalAPIClient:
         elif not isinstance(content, str):
             content = str(content) if content is not None else ""
 
+        if not isinstance(reasoning, str):
+            reasoning = str(reasoning) if reasoning is not None else ""
+
         response_msg = Message(
             role=MessageRole.ASSISTANT,
             text=content,
+            reasoning=reasoning,
         )
         return response_msg
 
-    async def send_message_stream(self, messages: List[Message]) -> AsyncGenerator[str, None]:
-        """Send messages and stream the response token by token."""
+    async def send_message_stream(self, messages: List[Message]) -> AsyncGenerator[tuple, None]:
+        """Send messages and stream the response token by token.
+
+        Yields (kind, text) tuples where kind is 'content' or 'reasoning'.
+        """
         openai_messages = [m.to_openai_format() for m in messages]
         payload = {
             "model": self.config.model_name,
@@ -168,4 +176,7 @@ class MultimodalAPIClient:
             delta = choices[0].get("delta", {})
             content = delta.get("content", "")
             if content:
-                yield content
+                yield ("content", content)
+            reasoning = delta.get("reasoning_content", "") or delta.get("reasoning", "")
+            if reasoning:
+                yield ("reasoning", reasoning)

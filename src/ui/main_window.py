@@ -24,6 +24,7 @@ CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".multimodal_debugger_config
 class APIWorker(QObject):
     """Worker for running API calls in a background thread."""
     token_received = pyqtSignal(str)
+    reasoning_received = pyqtSignal(str)
     response_complete = pyqtSignal(Message)
     error_occurred = pyqtSignal(str)
     log_entry = pyqtSignal(str, str)  # direction, content
@@ -49,6 +50,8 @@ class APIWorker(QObject):
                     msg = Message(role=MessageRole.ASSISTANT, text=full_text)
                 else:
                     msg = loop.run_until_complete(client.send_message(self.messages))
+                    if msg.reasoning:
+                        self.reasoning_received.emit(msg.reasoning)
                 self.response_complete.emit(msg)
             finally:
                 loop.close()
@@ -58,9 +61,12 @@ class APIWorker(QObject):
     async def _run_stream(self, client) -> str:
         """Run streaming request, emit tokens and return full text."""
         full_text = ""
-        async for token in client.send_message_stream(self.messages):
-            full_text += token
-            self.token_received.emit(token)
+        async for kind, token in client.send_message_stream(self.messages):
+            if kind == "reasoning":
+                self.reasoning_received.emit(token)
+            else:
+                full_text += token
+                self.token_received.emit(token)
         return full_text
 
 
@@ -84,7 +90,7 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(4, 4, 4, 4)
         main_layout.setSpacing(4)
 
-        # Top: Config panel (1/6 of height)
+        # Top: Config panel (compact single-row layout)
         self.config_panel = ConfigPanel()
         main_layout.addWidget(self.config_panel, 1)
 
@@ -101,11 +107,10 @@ class MainWindow(QMainWindow):
         total_width = self.minimumWidth()
         bottom_splitter.setSizes([int(total_width * 2 / 3), int(total_width * 1 / 3)])
 
-        main_layout.addWidget(bottom_splitter, 5)
+        main_layout.addWidget(bottom_splitter, 9)
 
         # Connect signals
         self.chat_panel.message_sent.connect(self._on_message_sent)
-        self.config_panel.send_request.connect(self._on_send_request)
 
     def _load_config(self):
         """Load saved configuration."""
@@ -125,10 +130,6 @@ class MainWindow(QMainWindow):
             self.log_panel.log_api_response(content)
         else:
             self.log_panel.append_log(direction, content)
-
-    def _on_send_request(self, config: AppConfig):
-        """Handle send request from config panel."""
-        self._send_message(config)
 
     def _on_message_sent(self, message: Message):
         """Handle a message sent from the chat panel."""
@@ -165,8 +166,6 @@ class MainWindow(QMainWindow):
             self.chat_panel.add_streaming_message()
 
         # Disable send button during request
-        self.config_panel.send_btn.setEnabled(False)
-        self.config_panel.send_btn.setText("处理中...")
         self.chat_panel.send_btn.setEnabled(False)
 
         self._api_thread = QThread()
@@ -175,6 +174,7 @@ class MainWindow(QMainWindow):
 
         self._api_thread.started.connect(self._api_worker.run)
         self._api_worker.token_received.connect(self._on_token_received)
+        self._api_worker.reasoning_received.connect(self._on_reasoning_received)
         self._api_worker.response_complete.connect(self._on_response_complete)
         self._api_worker.error_occurred.connect(self._on_api_error)
         self._api_worker.log_entry.connect(self._on_api_log)
@@ -194,9 +194,16 @@ class MainWindow(QMainWindow):
         """Handle a streaming token."""
         self.chat_panel.append_stream_token(token)
 
+    def _on_reasoning_received(self, token: str):
+        """Handle a reasoning/thinking token."""
+        self.chat_panel.append_reasoning_token(token)
+
     def _on_response_complete(self, message: Message):
         """Handle API response completion."""
         if not self._current_stream_mode:
+            self.chat_panel.clear_reasoning()
+            if message.reasoning:
+                self.chat_panel.set_reasoning(message.reasoning)
             self.chat_panel.add_message(message)
         else:
             self.chat_panel.finish_streaming_message()
@@ -212,9 +219,7 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "API 错误", f"请求失败:\n{error_msg}")
 
     def _enable_send_buttons(self):
-        """Re-enable send buttons after request completes."""
-        self.config_panel.send_btn.setEnabled(True)
-        self.config_panel.send_btn.setText("发送")
+        """Re-enable send button after request completes."""
         self.chat_panel.send_btn.setEnabled(True)
 
     def closeEvent(self, event):

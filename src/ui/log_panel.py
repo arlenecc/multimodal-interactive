@@ -50,8 +50,8 @@ class LogPanel(QWidget):
         # setMaximumBlockCount is on QTextDocument, not QTextEdit.
         self.log_text.document().setMaximumBlockCount(1000)
         self.log_text.setStyleSheet(
-            "QTextEdit { background-color: #1e1e1e; color: #d4d4d4; "
-            "font-size: 11px; border: 1px solid #333; }"
+            "QTextEdit { background-color: #ffffff; color: #333333; "
+            "font-size: 11px; border: 1px solid #ddd; }"
         )
         layout.addWidget(self.log_text)
 
@@ -65,19 +65,19 @@ class LogPanel(QWidget):
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
         if direction == "request":
-            color = "#569cd6"  # Blue
+            color = "#1565C0"  # Blue
             icon = ">>>"
         elif direction == "response":
-            color = "#6a9955"  # Green
+            color = "#2E7D32"  # Green
             icon = "<<<"
         elif direction == "error":
-            color = "#f44747"  # Red
+            color = "#C62828"  # Red
             icon = "!!!"
         elif direction == "info":
-            color = "#dcdcaa"  # Yellow
+            color = "#F57F17"  # Amber
             icon = "---"
         else:
-            color = "#d4d4d4"
+            color = "#333333"
             icon = "..."
 
         # Escape content so HTML/<script>/etc. in API responses is shown literally
@@ -86,7 +86,7 @@ class LogPanel(QWidget):
 
         html_out = (
             f'<div style="margin: 2px 0;">'
-            f'<span style="color: #858585;">[{timestamp}]</span> '
+            f'<span style="color: #999999;">[{timestamp}]</span> '
             f'<span style="color: {color}; font-weight: bold;">{icon} {direction.upper()}</span>'
             f'<pre style="color: {color}; margin: 2px 0 2px 16px; white-space: pre-wrap;">'
             f'{safe_content}</pre>'

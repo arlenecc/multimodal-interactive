@@ -208,6 +208,8 @@ class ChatPanel(QWidget):
         self._stream_text = ""
         self._stream_role_label = None
         self._last_ui_update_ts = 0.0
+        self._reasoning_text = ""
+        self._last_reasoning_update_ts = 0.0
         self._setup_ui()
 
     def _setup_ui(self):
@@ -263,8 +265,8 @@ class ChatPanel(QWidget):
         # Text input
         self.text_input = QTextEdit()
         self.text_input.setPlaceholderText("输入消息... (Enter 发送, Shift+Enter 换行)")
-        self.text_input.setMaximumHeight(80)
-        self.text_input.setMinimumHeight(36)
+        self.text_input.setMaximumHeight(60)
+        self.text_input.setMinimumHeight(32)
         self.text_input.setStyleSheet(
             "QTextEdit { border: 1px solid #ccc; border-radius: 4px; padding: 6px; font-size: 13px; }"
         )
@@ -286,6 +288,17 @@ class ChatPanel(QWidget):
         input_layout.addWidget(self.send_btn)
 
         layout.addLayout(input_layout)
+
+        # Thinking process area
+        self.thinking_text = QTextEdit()
+        self.thinking_text.setReadOnly(True)
+        self.thinking_text.setPlaceholderText("模型思考过程将在此处实时显示...")
+        self.thinking_text.setFixedHeight(130)
+        self.thinking_text.setStyleSheet(
+            "QTextEdit { background-color: #f8f9fa; color: #555; "
+            "font-size: 12px; border: 1px solid #ddd; border-radius: 4px; padding: 4px; }"
+        )
+        layout.addWidget(self.thinking_text)
 
         # Clear button
         bottom_layout = QHBoxLayout()
@@ -402,8 +415,32 @@ class ChatPanel(QWidget):
         self._stream_token_count = 0
         self._stream_text = ""
         self._last_ui_update_ts = 0.0
+        self.clear_reasoning()
         self.speed_label.show()
         self._scroll_to_bottom()
+
+    def append_reasoning_token(self, token: str):
+        """Append a reasoning token to the thinking process area."""
+        self._reasoning_text += token
+        now = time.time()
+        if now - self._last_reasoning_update_ts >= 0.033:
+            self.thinking_text.setPlainText(self._reasoning_text)
+            self._last_reasoning_update_ts = now
+            sb = self.thinking_text.verticalScrollBar()
+            sb.setValue(sb.maximum())
+
+    def set_reasoning(self, text: str):
+        """Set the full reasoning text (for non-streaming responses)."""
+        self._reasoning_text = text
+        self.thinking_text.setPlainText(text)
+        sb = self.thinking_text.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def clear_reasoning(self):
+        """Clear the thinking process area."""
+        self._reasoning_text = ""
+        self._last_reasoning_update_ts = 0.0
+        self.thinking_text.clear()
 
     def append_stream_token(self, token: str):
         """Append a streaming token to the current response."""
@@ -471,6 +508,11 @@ class ChatPanel(QWidget):
         self._stream_token_count = 0
         self._stream_text = ""
         self._last_ui_update_ts = 0.0
+        # Flush any throttled reasoning text so the final content is shown
+        if self._reasoning_text:
+            self.thinking_text.setPlainText(self._reasoning_text)
+            sb = self.thinking_text.verticalScrollBar()
+            sb.setValue(sb.maximum())
         self._scroll_to_bottom()
 
     def _scroll_to_bottom(self):
@@ -502,6 +544,7 @@ class ChatPanel(QWidget):
         self._last_ui_update_ts = 0.0
         self.speed_label.hide()
         self.media_preview.clear_all()
+        self.clear_reasoning()
 
     def eventFilter(self, obj, event):
         """Intercept Return/Enter on the text input to send the message.
