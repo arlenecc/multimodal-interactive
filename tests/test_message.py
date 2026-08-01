@@ -116,6 +116,36 @@ class TestMediaContent:
         assert fmt["type"] == "input_audio"
         assert "data" in fmt["input_audio"]
 
+    def test_audio_format_m4a(self):
+        """Test that m4a audio is mapped to aac, not incorrectly to wav."""
+        b64data = base64.b64encode(b"fake").decode()
+        # m4a mime type varies by platform
+        for m4a_mime in ("audio/mp4", "audio/x-m4a", "audio/m4a", "audio/mp4a-latm"):
+            media = MediaContent(
+                type=MediaType.AUDIO,
+                data=b64data,
+                mime_type=m4a_mime,
+            )
+            assert media._get_audio_format() == "aac", f"Failed for {m4a_mime}"
+
+    def test_audio_format_wav(self):
+        """Test wav audio format mapping."""
+        media = MediaContent(
+            type=MediaType.AUDIO,
+            data="fake",
+            mime_type="audio/wav",
+        )
+        assert media._get_audio_format() == "wav"
+
+    def test_audio_format_mp3(self):
+        """Test mp3 audio format mapping."""
+        media = MediaContent(
+            type=MediaType.AUDIO,
+            data="fake",
+            mime_type="audio/mpeg",
+        )
+        assert media._get_audio_format() == "mp3"
+
     def test_to_openai_format_video(self):
         """Test converting video to OpenAI format."""
         b64data = base64.b64encode(b"fake").decode()

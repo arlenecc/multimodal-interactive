@@ -325,6 +325,12 @@ class ChatPanel(QWidget):
 
     def _on_send(self):
         """Handle send button click."""
+        # Block sending while a request is in progress. The send button is
+        # disabled during requests, but Enter key bypasses it via the event
+        # filter — this guard catches that path.
+        if not self.send_btn.isEnabled():
+            return
+
         text = self.text_input.toPlainText().strip()
         media_items = self.media_preview.get_media_items()
 
@@ -334,6 +340,7 @@ class ChatPanel(QWidget):
 
         # Build message
         media_contents = []
+        failed_files = []
         for item in media_items:
             mt_map = {"image": MediaType.IMAGE, "audio": MediaType.AUDIO, "video": MediaType.VIDEO}
             mt = mt_map.get(item["type"], MediaType.IMAGE)
@@ -341,7 +348,17 @@ class ChatPanel(QWidget):
                 mc = MediaContent.from_file(item["path"], mt)
                 media_contents.append(mc)
             except Exception:
-                continue
+                failed_files.append(os.path.basename(item["path"]))
+
+        if failed_files:
+            QMessageBox.warning(
+                self, "附件加载失败",
+                "以下文件加载失败，将被忽略:\n" + "\n".join(failed_files),
+            )
+
+        # Don't send an empty message (e.g. all media failed to load)
+        if not text and not media_contents:
+            return
 
         msg = Message(role=MessageRole.USER, text=text, media=media_contents)
         self.add_message(msg)
@@ -438,12 +455,22 @@ class ChatPanel(QWidget):
         bubble = MessageBubble(msg)
         self.chat_layout.insertWidget(self.chat_layout.count() - 1, bubble)
 
+        # Show final stats (don't hide — let the user see them until next send)
+        if self._stream_start_time is not None:
+            elapsed = time.time() - self._stream_start_time
+            if elapsed > 0:
+                tokens_per_sec = self._stream_token_count / elapsed
+                self.speed_label.setText(
+                    f"✓ 推理速度: {tokens_per_sec:.1f} tokens/s | "
+                    f"已用时间: {elapsed:.1f}s | Tokens: {self._stream_token_count}"
+                )
+
         self._streaming_label = None
         self._stream_role_label = None
         self._stream_start_time = None
         self._stream_token_count = 0
         self._stream_text = ""
-        self.speed_label.hide()
+        self._last_ui_update_ts = 0.0
         self._scroll_to_bottom()
 
     def _scroll_to_bottom(self):
@@ -472,7 +499,9 @@ class ChatPanel(QWidget):
         self._stream_start_time = None
         self._stream_token_count = 0
         self._stream_text = ""
+        self._last_ui_update_ts = 0.0
         self.speed_label.hide()
+        self.media_preview.clear_all()
 
     def eventFilter(self, obj, event):
         """Intercept Return/Enter on the text input to send the message.

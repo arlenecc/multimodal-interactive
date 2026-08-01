@@ -73,6 +73,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1200, 800)
         self._api_thread = None
         self._api_worker = None
+        self._current_stream_mode = False  # captured at request time
         self._setup_ui()
         self._load_config()
 
@@ -148,10 +149,18 @@ class MainWindow(QMainWindow):
         if not messages:
             return
 
+        # Guard against concurrent sends BEFORE adding streaming bubbles or
+        # disabling UI, so we don't leave dangling state if we bail out.
+        if self._api_thread is not None and self._api_thread.isRunning():
+            return
+
         self.log_panel.log_info(f"发送消息 - 模型: {config.model_name}, 消息数: {len(messages)}")
 
-        # Prepare streaming
+        # Capture stream mode at request time so completion/error handlers
+        # use the same value even if the user toggles the checkbox mid-request.
         stream = config.stream_enabled
+        self._current_stream_mode = stream
+
         if stream:
             self.chat_panel.add_streaming_message()
 
@@ -159,12 +168,6 @@ class MainWindow(QMainWindow):
         self.config_panel.send_btn.setEnabled(False)
         self.config_panel.send_btn.setText("处理中...")
         self.chat_panel.send_btn.setEnabled(False)
-
-        # Start worker thread. Reuse guard: if a previous thread is somehow
-        # still alive (shouldn't happen — buttons are disabled during request),
-        # refuse to start a second one to avoid orphaned threads.
-        if self._api_thread is not None and self._api_thread.isRunning():
-            return
 
         self._api_thread = QThread()
         self._api_worker = APIWorker(config, messages, stream=stream)
@@ -193,7 +196,7 @@ class MainWindow(QMainWindow):
 
     def _on_response_complete(self, message: Message):
         """Handle API response completion."""
-        if not self.config_panel.get_config().stream_enabled:
+        if not self._current_stream_mode:
             self.chat_panel.add_message(message)
         else:
             self.chat_panel.finish_streaming_message()
@@ -204,7 +207,7 @@ class MainWindow(QMainWindow):
     def _on_api_error(self, error_msg: str):
         """Handle API error."""
         self.log_panel.log_error(f"API 错误: {error_msg}")
-        if self.config_panel.get_config().stream_enabled:
+        if self._current_stream_mode:
             self.chat_panel.finish_streaming_message()
         QMessageBox.critical(self, "API 错误", f"请求失败:\n{error_msg}")
 
@@ -220,4 +223,5 @@ class MainWindow(QMainWindow):
         if self._api_thread and self._api_thread.isRunning():
             self._api_thread.quit()
             self._api_thread.wait(3000)
+        self.config_panel.wait_for_fetch()
         event.accept()

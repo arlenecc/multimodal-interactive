@@ -4,7 +4,7 @@ from PyQt6.QtCore import pyqtSignal, Qt, QThread, QObject
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit,
     QPushButton, QComboBox, QDoubleSpinBox, QSpinBox,
-    QCheckBox, QGroupBox, QMessageBox, QFileDialog,
+    QCheckBox, QMessageBox,
 )
 
 from src.config import AppConfig
@@ -153,6 +153,10 @@ class ConfigPanel(QWidget):
             QMessageBox.warning(self, "错误", "请先填写 Base URL")
             return
 
+        # Refuse to start a second fetch while one is already running.
+        if self._fetch_thread is not None and self._fetch_thread.isRunning():
+            return
+
         config = AppConfig(base_url=base_url, api_key=api_key, model_name="")
         self.fetch_btn.setEnabled(False)
         self.fetch_btn.setText("获取中...")
@@ -165,6 +169,10 @@ class ConfigPanel(QWidget):
         self._fetch_worker.error.connect(self._on_models_error)
         self._fetch_worker.finished.connect(self._fetch_thread.quit)
         self._fetch_worker.error.connect(self._fetch_thread.quit)
+        # Cleanup: delete worker and thread once finished so they don't leak
+        # on every fetch.
+        self._fetch_thread.finished.connect(self._fetch_worker.deleteLater)
+        self._fetch_thread.finished.connect(self._fetch_thread.deleteLater)
         self._fetch_thread.start()
 
     def _on_models_fetched(self, models: list):
@@ -178,7 +186,11 @@ class ConfigPanel(QWidget):
         idx = self.model_combo.findText(current)
         if idx >= 0:
             self.model_combo.setCurrentIndex(idx)
+        elif current:
+            # User had a custom model name not in the fetched list; preserve it
+            self.model_combo.setCurrentText(current)
         elif models:
+            # No previous selection; auto-select first model
             self.model_combo.setCurrentText(models[0])
 
     def _on_models_error(self, error_msg: str):
@@ -212,3 +224,9 @@ class ConfigPanel(QWidget):
         self.max_tokens_spin.setValue(config.max_tokens)
         self.temp_spin.setValue(config.temperature)
         self.stream_check.setChecked(config.stream_enabled)
+
+    def wait_for_fetch(self, timeout_ms: int = 3000):
+        """Wait for any in-progress model fetch to finish. Called on app close."""
+        if self._fetch_thread is not None and self._fetch_thread.isRunning():
+            self._fetch_thread.quit()
+            self._fetch_thread.wait(timeout_ms)

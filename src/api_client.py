@@ -105,6 +105,7 @@ class MultimodalAPIClient:
                             chunk = json.loads(data)
                             yield chunk
                         except json.JSONDecodeError:
+                            self._log("error", f"Stream JSON decode error: {data[:200]}")
                             continue
 
     async def fetch_models(self) -> List[str]:

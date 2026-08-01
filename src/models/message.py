@@ -1,6 +1,7 @@
 """Message data models for multimodal conversations."""
 import base64
 import mimetypes
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -35,7 +36,6 @@ class MediaContent:
     @classmethod
     def from_file(cls, filepath: str, media_type: MediaType) -> "MediaContent":
         """Create MediaContent from a file."""
-        import os
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"File not found: {filepath}")
 
@@ -101,6 +101,13 @@ class MediaContent:
                 "audio/mpeg": "mp3",
                 "audio/ogg": "ogg",
                 "audio/flac": "flac",
+                "audio/aac": "aac",
+                # m4a container typically holds AAC audio; mime detection
+                # varies by platform (mp4 / x-m4a / mp4a-latm).
+                "audio/mp4": "aac",
+                "audio/x-m4a": "aac",
+                "audio/m4a": "aac",
+                "audio/mp4a-latm": "aac",
             }
             return fmt_map.get(self.mime_type, "wav")
         return "wav"

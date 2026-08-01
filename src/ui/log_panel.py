@@ -47,7 +47,8 @@ class LogPanel(QWidget):
         self.log_text.setFontFamily("Menlo, Monaco, Courier New, monospace")
         # Cap retained blocks so a long debugging session doesn't blow up
         # memory (each append() adds one block; oldest are evicted automatically).
-        self.log_text.setMaximumBlockCount(1000)
+        # setMaximumBlockCount is on QTextDocument, not QTextEdit.
+        self.log_text.document().setMaximumBlockCount(1000)
         self.log_text.setStyleSheet(
             "QTextEdit { background-color: #1e1e1e; color: #d4d4d4; "
             "font-size: 11px; border: 1px solid #333; }"
